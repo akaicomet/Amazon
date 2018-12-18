@@ -9,4 +9,4 @@ clearly different from peripheral outlier nodes as you can see in Chart 1. The c
 who is not single node but actually very large group so that we could think it as core group surrounded
 by smaller peripheral group. Core group has strong tie within the group meaning that customers are
 more likely to do co-purchasing within the group where peripheral group doesn’t. This helps you to
-understand promo and sales strategy
+understand promo and sales strategy.
