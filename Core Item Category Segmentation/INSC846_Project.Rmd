@@ -1,0 +1,290 @@
+---
+title: "Core Item Category Segmentation in Amazon Shopping Data"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r}
+library(stringr) 
+library(splitstackshape)
+library(igraph)
+library(keyplayer)
+library(devtools)
+devtools::install_github("aslez/concoR")
+library(concoR)
+library(sna)
+library(blockmodeling)
+library(visNetwork)
+library(tcltk)
+
+```
+#Caategory DAta
+```{r}
+con <- gzcon(url("http://snap.stanford.edu/data/bigdata/amazon/amazon-meta.txt.gz"))
+tmp <- readLines(con)
+tmp <- str_split_fixed(tmp,pattern=':', n=2)
+
+#tmp <- readLines(con="D:/amazon-meta.txt")
+
+tblcategories_count <- 1
+tblcategories <- array('', dim=c(4000000,2))
+
+tblMain_count <- 1
+tblMain <- array('', dim=c(1000000,5))
+
+```
+
+#Clean and Organize Category Data
+
+```{r}
+rows <- nrow(tmp)
+i <- 1
+while (i <= rows) {
+
+Id <- ''  
+Id <- ifelse(tmp[i,1]=='Id',tmp[i,2] ,'') 
+if (Id != ''){
+  ASIN <- ifelse(tmp[i+1,1]=='ASIN',tmp[i+1,2],'') 
+  title <- ifelse(tmp[i+2,1]== '  title',tmp[i+2,2],'') 
+  group <- ifelse(tmp[i+3,1]== '  group',tmp[i+3,2],'') 
+  salesrank <-  ifelse(tmp[i+4,1] == '  salesrank',tmp[i+4,2],'')
+  #tblMain <- rbind(tblMain,data.frame(Id = Id, ASIN = ASIN, title = title, group = group, salesrank = salesrank))
+  tblMain[tblMain_count,1] <- Id
+  tblMain[tblMain_count,2] <- ASIN
+  tblMain[tblMain_count,3] <- title
+  tblMain[tblMain_count,4] <- group
+  tblMain[tblMain_count,5] <- salesrank
+  
+  tblMain_count <- tblMain_count + 1
+  
+
+  
+  j <- 0
+  n <- as.integer(ifelse(tmp[i+6,1] == '  categories',tmp[i+6,2],''))
+  n <- ifelse((is.na(n) || is.nan(n)),0,n)
+  if (n > 0){ 
+	tblcategories[tblcategories_count:(tblcategories_count+n-1),1] <- rep(Id,n)
+	tblcategories[tblcategories_count:(tblcategories_count+n-1),2] <- tmp[(i+7):(i+6+n),1]
+  }
+  tblcategories_count <- tblcategories_count + n
+  
+
+  Id <- '' 
+  
+}
+
+i = i +1
+   
+}
+
+```
+
+#Create Dataframe 
+
+```{r}
+rm(tmp)
+
+tblMain <- tblMain[tblMain[,1]!='',]
+#tblSimilar <- tblSimilar[tblSimilar[,1]!='',]
+tblcategories <- tblcategories[tblcategories[,1]!='',]
+#tblreviews <- tblreviews[tblreviews[,1]!='',]
+  
+tblMain2 <- data.frame(Id = as.numeric( tblMain[,1]), ASIN = tblMain[,2], title = tblMain[,3], group = tblMain[,4], salesrank = as.numeric(tblMain[,5]), stringsAsFactors = FALSE)
+#tblSimilar2 <- data.frame(Id = as.numeric(tblSimilar[,1]), similar = tblSimilar[,2], stringsAsFactors = FALSE)  
+tblcategories2 <- data.frame(Id = as.numeric(tblcategories[,1]), categories = tblcategories[,2], stringsAsFactors = FALSE) 
+#tblreviews2 <- data.frame(Id = as.numeric(tblreviews[,1]), reviews = tblreviews[,2], stringsAsFactors = FALSE)
+
+rm(tblMain) 
+rm(tblcategories)
+
+```
+ 
+#Decomment one by one for Amazon data to extract
+
+```{r}
+con <- gzcon(url("http://snap.stanford.edu/data/amazon0302.txt.gz"))
+#con <- gzcon(url("http://snap.stanford.edu/data/amazon0312.txt.gz"))
+#con <- gzcon(url("http://snap.stanford.edu/data/amazon0505.txt.gz"))
+#con <- gzcon(url("http://snap.stanford.edu/data/amazon0601.txt.gz"))
+```
+
+```{r}
+x <- readLines(con)
+x <- unlist(strsplit(x[5:length(x)], split="\t"))
+x <- data.frame(from = x[seq(length(x)) %% 2 == 1], to = x[seq(length(x)) %% 2 != 1])
+```
+
+```{r}
+names(tblMain2)[1]<-paste("from")
+x <- merge(x, tblMain2, by="from", all.x=TRUE)
+names(tblMain2)[1]<-paste("to")
+x <- merge(x, tblMain2, by="to", all.x=TRUE)
+
+tblcategories2 <- cSplit(tblcategories2, "categories","|")
+
+names(tblcategories2)[1]<-paste("from")
+x <- merge(x, unique(tblcategories2[,c('from','categories_04')]), by="from", all.x=TRUE)
+names(tblcategories2)[1]<-paste("to")
+x <- merge(x, unique(tblcategories2[,c('to','categories_04')]), by="to", all.x=TRUE)
+x$count <- 1
+
+rm(tblMain2) 
+rm(tblcategories2)
+
+```
+
+#Aggregate Category Level 4
+
+```{r}
+x_sum <-aggregate(x$count, by=list(x$categories_04.x,x$categories_04.y,x$group.x,x$group.y),FUN=sum, na.rm=TRUE)
+colnames(x_sum) <- c('from', 'to', 'fromGroup4','toGroup4','count')
+net_all <- graph_from_data_frame(d=x_sum,directed=T)
+
+x_sum_agg <- aggregate(x_sum$count, by=list(x_sum$from),FUN=sum, na.rm=TRUE)
+x_sum_agg <- x_sum_agg[order(-x_sum_agg$x),]
+
+```
+
+#Raw data network
+
+```{r}
+#iso <- V(net)[degree(net)==0]
+#net <- delete.vertices(net, iso)
+plot(simplify(net_all),  vertex.size=7, vertex.label.cex=0.7, vertex.label.color="black", , edge.arrow.size=.3)
+```
+
+#Find Core Category Item upto complete all categories
+#Compact Data
+
+```{r}
+#length(x_sum_agg$Group.1)
+for (i in 1:50) { 
+	net <- graph_from_data_frame(d=x_sum[x_sum$from %in% x_sum_agg$Group.1[1:i],],directed=T)       
+	#print(length(V(net)))
+	#print(x_sum_agg$Group.1[i])   
+	if (length(V(net)) == length(x_sum_agg$Group.1)) break    
+ }  
+
+net <- simplify(net)
+
+```
+
+#Plot compact data network
+
+```{r}
+plot(net,  vertex.size=7, vertex.label.cex=0.7, vertex.label.color="black", , edge.arrow.size=.3)
+ 
+```
+
+#Statistics for raw data
+
+```{r}
+size <- length(V(simplify(net_all)))
+average_distance <- mean_distance(simplify(net_all))
+diameter <- diameter(simplify(net_all))
+degree_centralization <- centralization.degree(simplify(net_all))$centralization
+closeness_centralization <- centralization.closeness(simplify(net_all))$centralization
+betweenness_centralization <- centralization.betweenness(simplify(net_all))$centralization
+degree_centralization_sd <- sd(centralization.degree(simplify(net_all))$res)
+closeness_centralization_sd <- sd(centralization.closeness(simplify(net_all))$res)
+betweenness_centralization_sd <- sd(centralization.betweenness(simplify(net_all))$res)
+density <- edge_density(simplify(net_all), loops=F)
+average_degree <- mean(degree(as.matrix(as_adjacency_matrix(  simplify(net_all)))))
+cohesion <- cohesion(simplify(net_all))
+global_clustering_coefficient <- transitivity(simplify(net_all),type = 'global')
+compactness <- mean(closeness(as.matrix(as_adjacency_matrix(  simplify(net_all)))))
+mean_core <- mean(graph.coreness(simplify(net_all)))
+median_core <- median(graph.coreness(simplify(net_all)))
+
+
+table <- matrix(c(round(size,2), round(average_distance,2), round(diameter,2), round(degree_centralization,2), round(closeness_centralization,2), round(betweenness_centralization,2), round(degree_centralization_sd,2), round(closeness_centralization_sd,2), round(betweenness_centralization_sd,2),  round(density,2), round(average_degree,2), round(cohesion,2), round(compactness,2), round(global_clustering_coefficient,2), round(mean_core,2), round(median_core,2)))
+
+rownames(table) <- c('size', 'Distance', 'Diameter', 'degree centralization', 'closeness centralization', 'betweenness centralization', 'degree centralization sd', 'closeness centralization sd', 'betweenness centralization sd', 'Density', 'Average Degree', 'Cohesion', 'Compactness', 'Global Clustering Coefficient', 'Mean Core', 'Median Core')
+
+as.table(table)
+
+```
+
+#Build CORE subgroup
+
+```{r}
+x_sum2 <- as_adjacency_matrix(net)
+x_sum2 <- as.matrix( x_sum2)
+diag(x_sum2) <- 1
+x_sum2.blks <- concor_hca(list(x_sum2), , max.iter = 300, p = 3)
+#x_sum2.blks
+```
+
+```{r}
+plot(net, vertex.color=x_sum2.blks$block, vertex.size=10, vertex.label.cex=0.8, vertex.label.color="black", edge.arrow.size=.3)
+
+```
+
+```{r}
+x_sum2.mod <- blockmodel(x_sum2,x_sum2.blks$block )
+#x_sum2.mod 
+#1 is boss center core 
+
+```
+
+#Removing Core Category Group
+
+```{r}
+plot(induced_subgraph(simplify(net_all), c(x_sum2.mod$order.vector[x_sum2.mod$block.membership !=1] )), vertex.size=15, vertex.label.cex=0.8, vertex.label.color="black", edge.arrow.size=.3)
+
+```
+
+```{r}
+x_sum2.reduced <- graph_from_adjacency_matrix(x_sum2.mod$block.model, weighted = TRUE, mode = "undirected")
+```
+
+#Block Group
+
+```{r}
+plot(simplify(x_sum2.reduced), vertex.size=50/unlist(x_sum2.reduced[[1]])[2:9]  )
+
+```
+
+#COre Group Network Stats
+
+```{r}
+net2 <- induced_subgraph(net_all, c(x_sum2.mod$order.vector[x_sum2.mod$block.membership ==1] ))
+net2 <- simplify(net2)
+size <- length(V(net2))
+average_distance <- mean_distance(net2)
+diameter <- diameter(net2)
+degree_centralization <- centralization.degree(net2)$centralization
+closeness_centralization <- centralization.closeness(net2)$centralization
+betweenness_centralization <- centralization.betweenness(net2)$centralization
+degree_centralization_sd <- sd(centralization.degree(net2)$res)
+closeness_centralization_sd <- sd(centralization.closeness(net2)$res)
+betweenness_centralization_sd <- sd(centralization.betweenness(net2)$res)
+density <- edge_density(net2, loops=F)
+average_degree <- mean(degree(as.matrix(as_adjacency_matrix(  net2))))
+cohesion <- cohesion(net2)
+global_clustering_coefficient <- transitivity(net2,type = 'global')
+compactness <- mean(closeness(as.matrix(as_adjacency_matrix(  net2))))
+mean_core <- mean(graph.coreness(net2))
+median_core <- median(graph.coreness(net2))
+table <- matrix(c(round(size,2),round(average_distance,2),round(diameter,2),round(degree_centralization,2),round(closeness_centralization,2),round(betweenness_centralization,2),round(degree_centralization_sd,2),round(closeness_centralization_sd,2),round(betweenness_centralization_sd,2),round(density,2),round(average_degree,2),round(cohesion,2),round(compactness,2),round(global_clustering_coefficient,2), round(mean_core,2), round(median_core,2)))
+rownames(table) <- c('size','Distance','Diameter','degree centralization','closeness centralization','betweenness centralization','degree centralization sd','closeness centralization sd','betweenness centralization sd','Density','Average Degree','Cohesion', 'Compactness','Global Clustering Coefficient','Mean Core', 'Median Core')
+as.table(table)
+
+
+```
+
+#Interaction chart for core item group
+
+```{r}
+nodes <- as_data_frame(net)
+links <- data.frame(id = x_sum2.blks$vertex, block = x_sum2.blks$block)
+
+network2 <- visNetwork(links,nodes  )  %>% visOptions(highlightNearest = TRUE, selectedBy= "block")
+network2
+```
+```{r}
+
+```
+
